@@ -2,6 +2,9 @@
 
 > 本软件由 **DeepSeek 辅助编写**（Developed with the assistance of DeepSeek）
 
+
+![DSH 托盘监控](assets/DSHTM.png)
+
 DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**：监控 DSH 运行状态，提供 启动 / 停止 / 重启、打开 Web UI、开机自启 等快捷操作。
 
 ## 特性
