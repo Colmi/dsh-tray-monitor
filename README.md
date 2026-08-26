@@ -1,5 +1,7 @@
 ﻿# DSH 托盘监控 (DSH Tray Monitor)
 
+> 本软件由 **DeepSeek 辅助编写**（Developed with the assistance of DeepSeek）
+
 DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**：监控 DSH 运行状态，提供 启动 / 停止 / 重启、打开 Web UI、开机自启 等快捷操作。
 
 ## 特性
@@ -58,6 +60,10 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /
 - `startScript` / `stopScript` 可为相对路径（相对 exe 目录）或绝对路径
 - 修改 `config.json` 后重启托盘生效
 
+
+## 致谢
+
+本软件由 DeepSeek 辅助编写。感谢 DeepSeek 与 DeepSeek Harness 生态的支持。
 ## 免责声明
 
 - 本项目与 DeepSeek 官方无关联，仅为 DSH 的辅助工具。
