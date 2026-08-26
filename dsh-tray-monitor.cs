@@ -35,6 +35,17 @@ namespace DshTray
         [STAThread]
         private static void Main()
         {
+            // 全局异常保护：记录日志，避免托盘因个别异常退出
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (s, e) =>
+            {
+                WriteLog("ui exception: " + (e.Exception == null ? "" : e.Exception.ToString()));
+            };
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                WriteLog("unhandled exception: " + (e.ExceptionObject as Exception));
+            };
+
             bool createdNew;
             using (var mutex = new Mutex(true, @"Local\DSH-Tray-Monitor-4DSH", out createdNew))
             {
@@ -122,20 +133,40 @@ namespace DshTray
             catch { return false; }
         }
 
+        // 通过 netstat 解析监听 3080 的进程 PID（避免 PowerShell 出错串）
         private static string GetPidString()
         {
             try
             {
-                var psi = new ProcessStartInfo("powershell",
-                    "-NoProfile -Command \"(Get-NetTCPConnection -LocalPort " + Port + " -State Listen | Select-Object -First 1).OwningProcess\"")
+                var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
                 { WindowStyle = ProcessWindowStyle.Hidden, CreateNoWindow = true, RedirectStandardOutput = true, UseShellExecute = false };
                 using (var p = Process.Start(psi))
                 {
-                    string o = p.StandardOutput.ReadToEnd().Trim();
-                    return string.IsNullOrEmpty(o) ? "" : " (PID " + o + ")";
+                    string outStr = p.StandardOutput.ReadToEnd();
+                    string portMark = ":" + Port;
+                    foreach (string raw in outStr.Split('\n'))
+                    {
+                        string line = (raw ?? "").Trim();
+                        if (line.IndexOf(portMark, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        if (line.IndexOf("LISTENING", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 5)
+                        {
+                            int n;
+                            if (int.TryParse(parts[parts.Length - 1], out n))
+                                return " (PID " + n + ")";
+                        }
+                    }
                 }
             }
-            catch { return ""; }
+            catch { }
+            return "";
+        }
+
+        private static string Truncate(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return s.Length <= max ? s : s.Substring(0, max);
         }
 
         private static void BuildMenu()
@@ -271,7 +302,7 @@ namespace DshTray
                 _pidStr = up ? GetPidString() : "";
             }
             string state = up ? "运行中" : "已停止";
-            _ni.Text = "DSH " + state + _pidStr;
+            _ni.Text = Truncate("DSH " + state + _pidStr, 63);
             _miStatus.Text = "状态：" + state + _pidStr;
             _miStart.Enabled = !up;
             _miStop.Enabled = up;
