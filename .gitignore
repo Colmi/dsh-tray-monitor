@@ -1,0 +1,11 @@
+﻿# 日志
+*.log
+logs/
+
+# 本地实际配置（含本机路径，不提交）
+config.json
+
+# 系统/临时
+*.tmp
+thumbs.db
+Desktop.ini
