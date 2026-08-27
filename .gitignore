@@ -9,3 +9,5 @@ config.json
 *.tmp
 thumbs.db
 Desktop.ini
+# 发布包（仅作 Release 附件，不入库）
+*.zip
