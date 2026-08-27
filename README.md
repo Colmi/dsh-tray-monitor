@@ -5,14 +5,15 @@
 
 ![DSH 托盘监控](assets/DSHTM.png)
 
-DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**：监控 DSH 运行状态，提供 启动 / 停止 / 重启、打开 Web UI、开机自启 等快捷操作。
+DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**：监控 DSH 运行状态，提供 启动 / 停止 / 重启、打开 Web UI、监控/DSH 开机自启 等快捷操作。
 ！！release仅作下载，一定要自己改配置！！
 
 ## 特性
 
 - 🖥️ 常驻 Windows 任务栏通知区（NotifyIcon），每 3 秒轮询 DSH 服务端口
-- 🔵 状态一目了然：托盘图标右下角圆点 **蓝=运行中 / 红=已停止**；Windows 通知也显示 DSH logo（exe 内置图标）
-- 📋 右键菜单：启动 / 停止 / 重启 DSH、打开 Web UI、打开数据目录、打开日志、**开机自启**、退出
+- 🔵 状态一目了然：托盘图标右下角圆点 **蓝=运行中 / 红=已停止**
+- 🔔 通知气泡使用**中性程序图标**（无状态圆点）；开启=蓝色 Info / 停止=黄色 Warning 色调区分
+- 📋 右键菜单：启动 / 停止 / 重启 DSH、打开 Web UI、打开数据目录、打开日志、**监控开机自启**、**DSH 开机自启**、退出
 - 🖱️ 双击托盘图标直接打开 Web UI
 - 🛡️ 单实例互斥；操作与状态写入日志
 - ⚙️ 可选 `config.json` 配置（端口、URL、日志、数据目录、启停脚本），开箱即用有合理默认值
@@ -21,19 +22,22 @@ DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**�
 
 | 文件 | 说明 |
 | --- | --- |
-| `dsh-tray-monitor.exe` | 编译好的主程序（.NET Framework 4.x，Windows 10/11） |
+| `dsh-tray-monitor.exe` | 编译好的主程序（.NET Framework 4.x，Windows 10/11；exe 内置中性图标） |
 | `dsh-tray-monitor.cs` | C# 源码（可用 csc 重新编译） |
 | `启动托盘.cmd` | 双击启动托盘（隐藏窗口） |
 | `启动DSH.ps1` / `停止DSH.ps1` | 启停 DSH 的示例脚本（按你的环境调整路径） |
 | `black-deepseek-logo.png` | 托盘底图（DeepSeek 官方 logo，版权归 DeepSeek 所有） |
-| `dsh-logo-running.ico` / `dsh-logo-stopped.ico` | 运行 / 停止状态图标 |
+| `dsh-logo.ico` | 中性程序图标（无状态圆点，exe 内置） |
+| `dsh-logo-running.ico` / `dsh-logo-stopped.ico` | 托盘运行 / 停止状态图标 |
 | `config.example.json` | 配置示例 |
 
 ## 使用方法
 
 1. 把整个目录放到任意位置（如 `D:\tools\dsh-tray-monitor`）
 2. 按需修改 `启动DSH.ps1` / `停止DSH.ps1`（或 `config.json`）指向你的 DSH 安装
-3. 双击 `启动托盘.cmd` 启动；或右键托盘图标开启「开机自启」
+3. 双击 `启动托盘.cmd` 启动；右键托盘图标可开启「监控开机自启」或「DSH 开机自启」
+
+> 提示：「DSH 开机自启」会在登录时自动启动 DSH Web 服务（注册表 Run 键 `DSHWebService`），不依赖监控是否常驻。
 
 ## 重新编译
 
@@ -41,7 +45,7 @@ DeepSeek Harness（DSH）Web 服务的**常驻任务栏通知区监控工具**�
 
 ```
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ ^
-  /win32icon:dsh-logo-running.ico /out:dsh-tray-monitor.exe ^
+  /win32icon:dsh-logo.ico /out:dsh-tray-monitor.exe ^
   /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
   dsh-tray-monitor.cs
 ```

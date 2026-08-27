@@ -21,13 +21,14 @@ namespace DshTray
         private static string StartScript = "启动DSH.ps1";
         private static string StopScript = "停止DSH.ps1";
 
-        private const string RunKeyName = "DSHTrayMonitor";
+        private const string RunKeyName = "DSHTrayMonitor";     // 监控本身开机自启
+        private const string RunKeyNameDsh = "DSHWebService";   // DSH 服务开机自启
         private static readonly string TrayDir = AppDomain.CurrentDomain.BaseDirectory;
 
         private static NotifyIcon _ni;
         private static ContextMenuStrip _menu;
         private static System.Windows.Forms.Timer _timer;
-        private static ToolStripMenuItem _miStatus, _miStart, _miStop, _miRestart, _miAuto, _miExit;
+        private static ToolStripMenuItem _miStatus, _miStart, _miStop, _miRestart, _miAuto, _miAutoDsh, _miExit;
         private static Icon _iconRunning, _iconStopped;
         private static bool _lastUp;
         private static string _pidStr = "";
@@ -60,7 +61,15 @@ namespace DshTray
                 _iconRunning = LoadIcon("dsh-logo-running.ico");
                 _iconStopped = LoadIcon("dsh-logo-stopped.ico");
 
-                _ni = new NotifyIcon { Icon = _iconRunning, Visible = true, Text = "DSH 状态检测中..." };
+                // 启动即按真实状态设置图标（避免开机自启后 DSH 未运行却显示蓝色运行图标）
+                bool initialUp = IsUp();
+                _lastUp = initialUp;
+                _ni = new NotifyIcon
+                {
+                    Icon = initialUp ? _iconRunning : _iconStopped,
+                    Visible = true,
+                    Text = Truncate("DSH " + (initialUp ? "运行中" : "已停止"), 63)
+                };
                 BuildMenu();
                 _ni.ContextMenuStrip = _menu;
                 _ni.DoubleClick += (s, e) => { try { Process.Start(Url); } catch { } };
@@ -68,7 +77,7 @@ namespace DshTray
                 _timer = new System.Windows.Forms.Timer { Interval = 3000 };
                 _timer.Tick += (s, e) => UpdateStatus();
 
-                WriteLog("tray monitor started (exe, config-loaded)");
+                WriteLog("tray monitor started (exe, config-loaded)" + (initialUp ? ", dsh up" : ", dsh down"));
                 UpdateStatus();
                 _timer.Start();
                 Application.Run();
@@ -179,7 +188,8 @@ namespace DshTray
             var miOpen = new ToolStripMenuItem("打开 Web UI");
             var miData = new ToolStripMenuItem("打开数据目录");
             var miLog = new ToolStripMenuItem("打开日志");
-            _miAuto = new ToolStripMenuItem("开机自启（关）");
+            _miAuto = new ToolStripMenuItem("监控开机自启（关）");
+            _miAutoDsh = new ToolStripMenuItem("DSH 开机自启（关）");
             _miExit = new ToolStripMenuItem("退出监控");
 
             _menu.Items.Add(_miStatus);
@@ -193,6 +203,8 @@ namespace DshTray
             _menu.Items.Add(miLog);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_miAuto);
+            _menu.Items.Add(_miAutoDsh);
+            _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_miExit);
 
             _miStart.Click += (s, e) => InvokeAction("start");
@@ -202,6 +214,7 @@ namespace DshTray
             miData.Click += (s, e) => { try { Process.Start("explorer.exe", DataDir); } catch { } };
             miLog.Click += (s, e) => { try { Process.Start("notepad.exe", LogFile); } catch { } };
             _miAuto.Click += (s, e) => ToggleAutoStart();
+            _miAutoDsh.Click += (s, e) => ToggleAutoStartDsh();
             _miExit.Click += (s, e) =>
             {
                 _ni.Visible = false;
@@ -281,6 +294,45 @@ namespace DshTray
             UpdateStatus();
         }
 
+        // DSH 服务本身开机自启（独立注册表项，登录时以隐藏窗口启动 DSH）
+        private static bool IsAutoStartDshOn()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false))
+                {
+                    return k != null && k.GetValue(RunKeyNameDsh) != null;
+                }
+            }
+            catch { return false; }
+        }
+
+        private static void ToggleAutoStartDsh()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
+                {
+                    if (k == null) return;
+                    if (IsAutoStartDshOn())
+                    {
+                        k.DeleteValue(RunKeyNameDsh, false);
+                        WriteLog("dsh autostart disabled");
+                    }
+                    else
+                    {
+                        string ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                            @"System32\WindowsPowerShell\v1.0\powershell.exe");
+                        string value = "\"" + ps + "\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + StartScript + "\"";
+                        k.SetValue(RunKeyNameDsh, value);
+                        WriteLog("dsh autostart enabled: " + value);
+                    }
+                }
+            }
+            catch (Exception ex) { WriteLog("dsh autostart error: " + ex.Message); }
+            UpdateStatus();
+        }
+
         private static void UpdateStatus()
         {
             bool up = IsUp();
@@ -290,7 +342,7 @@ namespace DshTray
                 if (up)
                 {
                     _ni.Icon = _iconRunning;
-                    _ni.ShowBalloonTip(2000, "DSH 运行中", "DSH Web 服务已就绪：" + Url, ToolTipIcon.Info);
+                    _ni.ShowBalloonTip(2000, "DSH 已开启", "DSH Web 服务已就绪：" + Url, ToolTipIcon.Info);
                     WriteLog("status: running");
                 }
                 else
@@ -307,7 +359,8 @@ namespace DshTray
             _miStart.Enabled = !up;
             _miStop.Enabled = up;
             _miRestart.Enabled = up;
-            _miAuto.Text = "开机自启（" + (IsAutoStartOn() ? "开" : "关") + "）";
+            _miAuto.Text = "监控开机自启（" + (IsAutoStartOn() ? "开" : "关") + "）";
+            _miAutoDsh.Text = "DSH 开机自启（" + (IsAutoStartDshOn() ? "开" : "关") + "）";
         }
     }
 }
