@@ -1,8 +1,12 @@
-﻿{
+{
   "url": "http://127.0.0.1:3080",
   "port": 3080,
   "logFile": "D:\\Deepseek-harness-data\\logs\\tray.log",
   "dataDir": "D:\\Deepseek-harness-data",
   "startScript": "启动DSH.ps1",
-  "stopScript": "停止DSH.ps1"
+  "stopScript": "停止DSH.ps1",
+  "dshRepo": "D:\\Deepseek-harness",
+  "dshHome": "D:\\Deepseek-harness-data",
+  "nodePath": "C:\\Program Files\\nodejs\\node.exe",
+  "deployDir": "D:\\Deepseek-harness-data\\dsh-tray-monitor"
 }

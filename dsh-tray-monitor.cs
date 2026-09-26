@@ -13,22 +13,27 @@ namespace DshTray
 {
     internal static class Program
     {
-        // ---- 默认配置（可用同目录 config.json 覆盖）----
         private static int Port = 3080;
         private static string Url = "http://127.0.0.1:3080";
-        private static string LogFile = @"D:\Deepseek-harness-data\logs\tray.log";
-        private static string DataDir = @"D:\Deepseek-harness-data";
+        private static string LogFile = "";
+        private static string DataDir = "";
         private static string StartScript = "启动DSH.ps1";
         private static string StopScript = "停止DSH.ps1";
+        private static string DshRepo = "";
+        private static string DshHome = "";
+        private static string NodePath = "";
+        private static string DeployDir = "";
+        private static bool ConfigLoaded = false;
 
-        private const string RunKeyName = "DSHTrayMonitor";     // 监控本身开机自启
-        private const string RunKeyNameDsh = "DSHWebService";   // DSH 服务开机自启
+        private const string RunKeyName = "DSHTrayMonitor";
+        private const string RunKeyNameDsh = "DSHWebService";
+        private const string DshRepoUrl = "https://github.com/deepseek-ai/deepseek-harness";
         private static readonly string TrayDir = AppDomain.CurrentDomain.BaseDirectory;
 
         private static NotifyIcon _ni;
         private static ContextMenuStrip _menu;
         private static System.Windows.Forms.Timer _timer;
-        private static ToolStripMenuItem _miStatus, _miStart, _miStop, _miRestart, _miAuto, _miAutoDsh, _miExit;
+        private static ToolStripMenuItem _miStatus, _miStart, _miStop, _miRestart, _miAuto, _miAutoDsh, _miConfig, _miExit;
         private static Icon _iconRunning, _iconStopped;
         private static bool _lastUp;
         private static string _pidStr = "";
@@ -36,7 +41,6 @@ namespace DshTray
         [STAThread]
         private static void Main()
         {
-            // 全局异常保护：记录日志，避免托盘因个别异常退出
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) =>
             {
@@ -57,11 +61,12 @@ namespace DshTray
                 LoadConfig();
                 StartScript = ResolvePath(StartScript);
                 StopScript = ResolvePath(StopScript);
+                if (string.IsNullOrEmpty(LogFile)) LogFile = Path.Combine(TrayDir, "tray.log");
+                if (string.IsNullOrEmpty(DataDir)) DataDir = TrayDir;
 
                 _iconRunning = LoadIcon("dsh-logo-running.ico");
                 _iconStopped = LoadIcon("dsh-logo-stopped.ico");
 
-                // 启动即按真实状态设置图标（避免开机自启后 DSH 未运行却显示蓝色运行图标）
                 bool initialUp = IsUp();
                 _lastUp = initialUp;
                 _ni = new NotifyIcon
@@ -96,7 +101,7 @@ namespace DshTray
             try
             {
                 string cfgPath = Path.Combine(TrayDir, "config.json");
-                if (!File.Exists(cfgPath)) return;
+                if (!File.Exists(cfgPath)) { ConfigLoaded = false; return; }
                 string json = File.ReadAllText(cfgPath);
                 var ser = new JavaScriptSerializer();
                 var dict = ser.Deserialize<Dictionary<string, object>>(json);
@@ -107,14 +112,29 @@ namespace DshTray
                 if (dict.ContainsKey("dataDir")) DataDir = dict["dataDir"].ToString();
                 if (dict.ContainsKey("startScript")) StartScript = dict["startScript"].ToString();
                 if (dict.ContainsKey("stopScript")) StopScript = dict["stopScript"].ToString();
+                if (dict.ContainsKey("dshRepo")) DshRepo = dict["dshRepo"].ToString();
+                if (dict.ContainsKey("dshHome")) DshHome = dict["dshHome"].ToString();
+                if (dict.ContainsKey("nodePath")) NodePath = dict["nodePath"].ToString();
+                if (dict.ContainsKey("deployDir")) DeployDir = dict["deployDir"].ToString();
+                if (!dict.ContainsKey("url")) Url = "http://127.0.0.1:" + Port;
+                ConfigLoaded = true;
             }
             catch (Exception ex) { WriteLog("config load error: " + ex.Message); }
         }
 
         private static Icon LoadIcon(string name)
         {
-            try { return new Icon(Path.Combine(TrayDir, name)); }
-            catch { return SystemIcons.Application; }
+            try { string p = Path.Combine(TrayDir, "ico", name); if (File.Exists(p)) return new Icon(p); } catch { }
+            try { string p = Path.Combine(TrayDir, name); if (File.Exists(p)) return new Icon(p); } catch { }
+            try
+            {
+                using (var s = typeof(Program).Assembly.GetManifestResourceStream("DshTray.Resources." + name))
+                {
+                    if (s != null) return new Icon(s);
+                }
+            }
+            catch { }
+            return SystemIcons.Application;
         }
 
         private static void WriteLog(string msg)
@@ -142,7 +162,6 @@ namespace DshTray
             catch { return false; }
         }
 
-        // 通过 netstat 解析监听 3080 的进程 PID（避免 PowerShell 出错串）
         private static string GetPidString()
         {
             try
@@ -188,6 +207,7 @@ namespace DshTray
             var miOpen = new ToolStripMenuItem("打开 Web UI");
             var miData = new ToolStripMenuItem("打开数据目录");
             var miLog = new ToolStripMenuItem("打开日志");
+            _miConfig = new ToolStripMenuItem("配置…");
             _miAuto = new ToolStripMenuItem("监控开机自启（关）");
             _miAutoDsh = new ToolStripMenuItem("DSH 开机自启（关）");
             _miExit = new ToolStripMenuItem("退出监控");
@@ -201,6 +221,7 @@ namespace DshTray
             _menu.Items.Add(miOpen);
             _menu.Items.Add(miData);
             _menu.Items.Add(miLog);
+            _menu.Items.Add(_miConfig);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_miAuto);
             _menu.Items.Add(_miAutoDsh);
@@ -213,6 +234,7 @@ namespace DshTray
             miOpen.Click += (s, e) => { try { Process.Start(Url); } catch { } };
             miData.Click += (s, e) => { try { Process.Start("explorer.exe", DataDir); } catch { } };
             miLog.Click += (s, e) => { try { Process.Start("notepad.exe", LogFile); } catch { } };
+            _miConfig.Click += (s, e) => OpenConfig();
             _miAuto.Click += (s, e) => ToggleAutoStart();
             _miAutoDsh.Click += (s, e) => ToggleAutoStartDsh();
             _miExit.Click += (s, e) =>
@@ -222,7 +244,6 @@ namespace DshTray
                 Application.Exit();
             };
         }
-
         private static void InvokeAction(string action)
         {
             WriteLog("action: " + action);
@@ -294,7 +315,6 @@ namespace DshTray
             UpdateStatus();
         }
 
-        // DSH 服务本身开机自启（独立注册表项，登录时以隐藏窗口启动 DSH）
         private static bool IsAutoStartDshOn()
         {
             try
@@ -361,6 +381,544 @@ namespace DshTray
             _miRestart.Enabled = up;
             _miAuto.Text = "监控开机自启（" + (IsAutoStartOn() ? "开" : "关") + "）";
             _miAutoDsh.Text = "DSH 开机自启（" + (IsAutoStartDshOn() ? "开" : "关") + "）";
+        }
+
+        private static void OpenConfig()
+        {
+            try { using (var f = new ConfigForm()) { f.ShowDialog(); } }
+            catch (Exception ex) { WriteLog("config dialog error: " + ex.Message); }
+        }
+
+        private static void ApplyDeployedConfig(int port, string node, string repo, string home, string logDir, string deployDir)
+        {
+            Port = port;
+            Url = "http://127.0.0.1:" + port;
+            NodePath = node;
+            DshRepo = repo;
+            DshHome = home;
+            DataDir = home;
+            LogFile = Path.Combine(logDir, "tray.log");
+            StartScript = Path.Combine(deployDir, "启动DSH.ps1");
+            StopScript = Path.Combine(deployDir, "停止DSH.ps1");
+            DeployDir = deployDir;
+            bool up = IsUp();
+            _lastUp = up;
+            _ni.Icon = up ? _iconRunning : _iconStopped;
+            UpdateStatus();
+            WriteLog("config applied: port=" + port + ", deploy=" + deployDir);
+        }
+
+        private static void SetAutoStart(string name, bool enabled, string value)
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
+                {
+                    if (k == null) return;
+                    if (enabled) k.SetValue(name, value);
+                    else k.DeleteValue(name, false);
+                }
+            }
+            catch (Exception ex) { WriteLog("autostart set error: " + ex.Message); }
+        }
+
+        private static void CopyIcons(string deployDir)
+        {
+            string dst = Path.Combine(deployDir, "ico");
+            Directory.CreateDirectory(dst);
+            string[] names = { "dsh-logo-running.ico", "dsh-logo-stopped.ico", "dsh-logo.ico" };
+            foreach (string name in names)
+            {
+                string target = Path.Combine(dst, name);
+                if (File.Exists(target)) continue;
+                bool ok = false;
+                try { string p = Path.Combine(TrayDir, "ico", name); if (File.Exists(p)) { File.Copy(p, target, false); ok = true; } } catch { }
+                if (!ok) { try { string p = Path.Combine(TrayDir, name); if (File.Exists(p)) { File.Copy(p, target, false); ok = true; } } catch { } }
+                if (!ok)
+                {
+                    try
+                    {
+                        using (var s = typeof(Program).Assembly.GetManifestResourceStream("DshTray.Resources." + name))
+                        {
+                            if (s != null)
+                            {
+                                using (var fs = new FileStream(target, FileMode.Create, FileAccess.Write))
+                                {
+                                    s.CopyTo(fs);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        private static void SwitchTo(string deployDir)
+        {
+            string newExe = Path.Combine(deployDir, "dsh-tray-monitor.exe");
+            string tmp = Path.Combine(Path.GetTempPath(), "dsh-tray-switch.cmd");
+            File.WriteAllText(tmp,
+                "@echo off\r\nping 127.0.0.1 -n 3 >nul\r\nstart \"\" /D \"" + deployDir + "\" \"" + newExe + "\"\r\n",
+                new System.Text.UTF8Encoding(false));
+            try
+            {
+                Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + tmp + "\"")
+                {
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    WorkingDirectory = deployDir
+                });
+            }
+            catch { }
+            _ni.Visible = false;
+            _timer.Stop();
+            Environment.Exit(0);
+        }
+        private static string BuildConfigJson(int port, string node, string repo, string home, string logDir, string deployDir)
+        {
+            var dict = new Dictionary<string, object>
+            {
+                { "url", "http://127.0.0.1:" + port },
+                { "port", port },
+                { "logFile", Path.Combine(logDir, "tray.log") },
+                { "dataDir", home },
+                { "startScript", "启动DSH.ps1" },
+                { "stopScript", "停止DSH.ps1" },
+                { "dshRepo", repo },
+                { "dshHome", home },
+                { "nodePath", node },
+                { "deployDir", deployDir }
+            };
+            return new JavaScriptSerializer().Serialize(dict);
+        }
+
+        private static string BuildStartScript(string node, string repo, string home, string logDir, int port)
+        {
+            return (@"# ============================================================
+#  DeepSeek Harness (DSH) 启动脚本（由 dsh-tray-monitor 配置自动生成）
+# ============================================================
+$ErrorActionPreference = 'Stop'
+$repo    = '__REPO__'
+$env:DSH_HOME = '__HOME__'
+$logDir  = '__LOGDIR__'
+$node    = '__NODE__'
+$port    = __PORT__
+
+if (-not (Test-Path $repo)) { Write-Host ""[错误] 未找到部署目录 $repo"" -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $node))  { Write-Host ""[错误] 未找到 Node.js: $node"" -ForegroundColor Red; exit 1 }
+
+if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+    Write-Host ""DSH 已在运行：http://127.0.0.1:$port"" -ForegroundColor Green
+    exit 0
+}
+
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$p = Start-Process -FilePath $node -ArgumentList '--import','tsx/esm','apps/cli/src/bin.ts','web','--no-open','--host','127.0.0.1','--port',$port `
+    -WorkingDirectory $repo `
+    -RedirectStandardOutput ""$logDir\web.out.log"" `
+    -RedirectStandardError  ""$logDir\web.err.log"" `
+    -WindowStyle Hidden -PassThru
+
+Start-Sleep -Seconds 10
+if (-not $p.HasExited) {
+    Write-Host ""DSH 已启动 (PID $($p.Id))：http://127.0.0.1:$port"" -ForegroundColor Green
+} else {
+    Write-Host '[错误] DSH 启动失败，日志如下：' -ForegroundColor Red
+    Get-Content ""$logDir\web.err.log"" -ErrorAction SilentlyContinue | Select-Object -Last 30
+    exit 1
+}
+")
+                .Replace("__REPO__", repo)
+                .Replace("__HOME__", home)
+                .Replace("__LOGDIR__", logDir)
+                .Replace("__NODE__", node)
+                .Replace("__PORT__", port.ToString());
+        }
+
+        private static string BuildStopScript(int port)
+        {
+            return (@"# ============================================================
+#  DeepSeek Harness (DSH) 停止脚本（由 dsh-tray-monitor 配置自动生成）
+# ============================================================
+$port = __PORT__
+$conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+if (-not $conn) { Write-Host 'DSH 未在运行'; exit 0 }
+$ids = $conn | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($id in $ids) { Stop-Process -Id $id -Force; Write-Host ""已停止 DSH 进程 PID $id"" }
+")
+                .Replace("__PORT__", port.ToString());
+        }
+
+        private static string BuildLauncherCmd()
+        {
+            return "@echo off\r\nrem DSH Tray Monitor launcher (generated by config)\r\nstart \"\" \"%~dp0dsh-tray-monitor.exe\"\r\n";
+        }
+
+        // ============ 配置窗体 ============
+
+        private sealed class ConfigForm : Form
+        {
+            private const int EM_SETCUEBANNER = 0x1501;
+
+            [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+            private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+            private readonly TextBox txtPort = new TextBox();
+            private readonly TextBox txtNode = new TextBox();
+            private readonly TextBox txtRepo = new TextBox();
+            private readonly TextBox txtHome = new TextBox();
+            private readonly TextBox txtLog = new TextBox();
+            private readonly TextBox txtDeploy = new TextBox();
+            private readonly CheckBox chkMon = new CheckBox();
+            private readonly CheckBox chkDsh = new CheckBox();
+            private readonly Label lblStatus = new Label();
+
+            public ConfigForm()
+            {
+                Text = "DSH 托盘监控 配置";
+                StartPosition = FormStartPosition.CenterScreen;
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                ClientSize = new Size(660, 332);
+                BuildUi();
+                LoadCurrent();
+            }
+
+            protected override void OnLoad(EventArgs e)
+            {
+                base.OnLoad(e);
+                SetCue(txtNode, "例如 C:\\Program Files\\nodejs\\node.exe");
+                SetCue(txtRepo, "例如 D:\\Deepseek-harness（DSH 源码目录）");
+                SetCue(txtHome, "例如 D:\\Deepseek-harness-data（DSH_HOME）");
+                SetCue(txtLog, "例如 D:\\Deepseek-harness-data\\logs（留空则 <DSH_HOME>\\logs）");
+                SetCue(txtDeploy, "留空则默认 <DSH_HOME>\\dsh-tray-monitor");
+            }
+
+            private static void SetCue(TextBox tb, string text)
+            {
+                try { SendMessage(tb.Handle, EM_SETCUEBANNER, (IntPtr)1, text); } catch { }
+            }
+
+            private void AddLabel(string text, int y)
+            {
+                Controls.Add(new Label { Text = text, Left = 12, Top = y + 4, Width = 150, TextAlign = ContentAlignment.MiddleRight });
+            }
+
+            private Button Btn(string text, int left, int top, int width)
+            {
+                var b = new Button { Text = text, Left = left, Top = top, Width = width };
+                Controls.Add(b);
+                return b;
+            }
+
+            private void BuildUi()
+            {
+                int x = 170, w = 400, bx = 576;
+                AddLabel("Web 服务端口", 14);
+                txtPort.SetBounds(x, 14, 80, 25); Controls.Add(txtPort);
+
+                AddLabel("Node 可执行文件", 44);
+                txtNode.SetBounds(x, 44, w, 25); Controls.Add(txtNode);
+                Btn("浏览…", bx, 44, 64).Click += (s, e) => PickFile(txtNode, "可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*");
+
+                AddLabel("DSH 部署目录", 74);
+                txtRepo.SetBounds(x, 74, w, 25); Controls.Add(txtRepo);
+                Btn("浏览…", bx, 74, 64).Click += (s, e) => PickFolder(txtRepo);
+
+                AddLabel("DSH 数据目录 (DSH_HOME)", 104);
+                txtHome.SetBounds(x, 104, w, 25); Controls.Add(txtHome);
+                Btn("浏览…", bx, 104, 64).Click += (s, e) => PickFolder(txtHome);
+
+                AddLabel("日志目录", 134);
+                txtLog.SetBounds(x, 134, w, 25); Controls.Add(txtLog);
+                Btn("浏览…", bx, 134, 64).Click += (s, e) => PickFolder(txtLog);
+
+                AddLabel("部署目录", 164);
+                txtDeploy.SetBounds(x, 164, w, 25); Controls.Add(txtDeploy);
+                Btn("浏览…", bx, 164, 64).Click += (s, e) => PickFolder(txtDeploy);
+
+                chkMon.SetBounds(x, 198, 230, 24); chkMon.Text = "监控开机自启"; Controls.Add(chkMon);
+                chkDsh.SetBounds(x + 240, 198, 230, 24); chkDsh.Text = "DSH 开机自启"; Controls.Add(chkDsh);
+
+                Btn("自动检测", x, 228, 88).Click += (s, e) => DetectAll();
+                Btn("验证", x + 96, 228, 76).Click += (s, e) => RunValidate();
+                Btn("部署", x + 176, 228, 76).Click += (s, e) => Deploy();
+                Btn("取消", x + 256, 228, 76).Click += (s, e) => Close();
+
+                lblStatus.SetBounds(12, 264, 636, 56);
+                lblStatus.Text = "";
+                Controls.Add(lblStatus);
+            }
+
+            private void LoadCurrent()
+            {
+                txtPort.Text = Program.Port.ToString();
+                chkMon.Checked = Program.IsAutoStartOn();
+                chkDsh.Checked = Program.IsAutoStartDshOn();
+
+                if (Program.ConfigLoaded)
+                {
+                    txtNode.Text = Program.NodePath;
+                    txtRepo.Text = Program.DshRepo;
+                    txtHome.Text = Program.DshHome;
+                    txtLog.Text = Path.GetDirectoryName(Program.LogFile) ?? "";
+                    txtDeploy.Text = Program.DeployDir;
+                }
+                else
+                {
+                    txtNode.Text = "";
+                    txtRepo.Text = "";
+                    txtHome.Text = "";
+                    txtLog.Text = "";
+                    txtDeploy.Text = "";
+                }
+            }
+
+            private void PickFile(TextBox tb, string filter)
+            {
+                using (var d = new OpenFileDialog { Filter = filter })
+                {
+                    if (d.ShowDialog() == DialogResult.OK) tb.Text = d.FileName;
+                }
+            }
+
+            private void PickFolder(TextBox tb)
+            {
+                using (var d = new FolderBrowserDialog())
+                {
+                    if (d.ShowDialog() == DialogResult.OK) tb.Text = d.SelectedPath;
+                }
+            }
+
+            private string FindNode()
+            {
+                foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+                {
+                    try { string p = Path.Combine(dir.Trim(), "node.exe"); if (File.Exists(p)) return p; } catch { }
+                }
+                string[] candidates =
+                {
+                    @"C:\Program Files\nodejs\node.exe",
+                    @"C:\Program Files (x86)\nodejs\node.exe",
+                    Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Programs\nodejs\node.exe")
+                };
+                foreach (string p in candidates) { try { if (File.Exists(p)) return p; } catch { } }
+                return null;
+            }
+
+            private List<string> FixedRoots()
+            {
+                var list = new List<string>();
+                try
+                {
+                    foreach (var d in DriveInfo.GetDrives())
+                    {
+                        try { if (d.DriveType == DriveType.Fixed && d.IsReady) list.Add(d.RootDirectory.FullName); } catch { }
+                    }
+                }
+                catch { }
+                return list;
+            }
+
+            private string FindDshRepo()
+            {
+                var candidates = new List<string>();
+                foreach (string root in FixedRoots())
+                {
+                    candidates.Add(Path.Combine(root, "Deepseek-harness"));
+                    candidates.Add(Path.Combine(root, "deepseek-harness"));
+                    try
+                    {
+                        foreach (string d in Directory.GetDirectories(root))
+                        {
+                            if (Path.GetFileName(d).IndexOf("harness", StringComparison.OrdinalIgnoreCase) >= 0) candidates.Add(d);
+                        }
+                    }
+                    catch { }
+                }
+                try { candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Deepseek-harness")); } catch { }
+                foreach (string c in candidates)
+                {
+                    try { if (File.Exists(Path.Combine(c, "apps", "cli", "src", "bin.ts"))) return c; } catch { }
+                }
+                return null;
+            }
+
+            private string FindDshHome(string repo)
+            {
+                var candidates = new List<string>();
+                if (!string.IsNullOrEmpty(repo))
+                {
+                    try
+                    {
+                        string parent = Path.GetDirectoryName(repo);
+                        if (!string.IsNullOrEmpty(parent))
+                        {
+                            candidates.Add(Path.Combine(parent, "Deepseek-harness-data"));
+                            foreach (string d in Directory.GetDirectories(parent))
+                            {
+                                if (Path.GetFileName(d).IndexOf("harness-data", StringComparison.OrdinalIgnoreCase) >= 0) candidates.Add(d);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                foreach (string root in FixedRoots())
+                {
+                    candidates.Add(Path.Combine(root, "Deepseek-harness-data"));
+                    try
+                    {
+                        foreach (string d in Directory.GetDirectories(root))
+                        {
+                            if (Path.GetFileName(d).IndexOf("harness-data", StringComparison.OrdinalIgnoreCase) >= 0) candidates.Add(d);
+                        }
+                    }
+                    catch { }
+                }
+                try { candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Deepseek-harness-data")); } catch { }
+                foreach (string c in candidates)
+                {
+                    try { if (Directory.Exists(c) && Directory.Exists(Path.Combine(c, "profiles"))) return c; } catch { }
+                }
+                foreach (string c in candidates)
+                {
+                    try { if (Directory.Exists(c)) return c; } catch { }
+                }
+                return null;
+            }
+
+            private void DetectAll()
+            {
+                var found = new List<string>();
+                var missed = new List<string>();
+
+                string node = FindNode();
+                if (node != null) { txtNode.Text = node; found.Add("Node"); } else missed.Add("Node");
+
+                string repo = FindDshRepo();
+                if (repo != null) { txtRepo.Text = repo; found.Add("DSH 部署目录"); } else missed.Add("DSH 部署目录");
+
+                string home = FindDshHome(repo);
+                if (home == null && !string.IsNullOrWhiteSpace(txtHome.Text)) home = txtHome.Text.Trim();
+                if (home != null) { txtHome.Text = home; found.Add("DSH 数据目录"); } else missed.Add("DSH 数据目录");
+
+                if (!string.IsNullOrEmpty(home))
+                {
+                    txtLog.Text = Path.Combine(home, "logs");
+                    txtDeploy.Text = Path.Combine(home, "dsh-tray-monitor");
+                    found.Add("日志目录");
+                    found.Add("部署目录");
+                }
+
+                string msg = "已自动检测：" + (found.Count > 0 ? string.Join("、", found) : "无");
+                if (missed.Count > 0) msg += "；未检测到：" + string.Join("、", missed) + "（请手动选择）";
+                SetStatus(msg, missed.Count > 0);
+            }
+
+            private bool Validate(out string err, out string actionUrl)
+            {
+                actionUrl = null;
+                int port;
+                if (!int.TryParse(txtPort.Text.Trim(), out port) || port < 1 || port > 65535)
+                { err = "端口必须是 1-65535 的整数。"; return false; }
+                if (string.IsNullOrWhiteSpace(txtNode.Text) || !File.Exists(txtNode.Text.Trim()))
+                { err = "未检测到 Node.js（可点「自动检测」或「浏览…」选择 node.exe），DSH 依赖 Node.js 运行（Node 22.19+ 或 24+）。"; actionUrl = "https://nodejs.org/"; return false; }
+                if (string.IsNullOrWhiteSpace(txtRepo.Text) || !Directory.Exists(txtRepo.Text.Trim()))
+                { err = "DSH 部署目录不存在，请先部署 DeepSeek Harness 或点「自动检测」。"; actionUrl = Program.DshRepoUrl; return false; }
+                if (!File.Exists(Path.Combine(txtRepo.Text.Trim(), "apps", "cli", "src", "bin.ts")))
+                { err = "DSH 部署目录中未找到 apps\\cli\\src\\bin.ts，请确认选择的是 DSH 源码目录。"; actionUrl = Program.DshRepoUrl; return false; }
+                if (string.IsNullOrWhiteSpace(txtHome.Text))
+                { err = "请填写 DSH 数据目录（DSH_HOME），例如 D:\\Deepseek-harness-data。"; return false; }
+                err = "";
+                return true;
+            }
+
+            private bool RunValidate()
+            {
+                string err, url;
+                if (Validate(out err, out url)) { SetStatus("校验通过。", false); return true; }
+                SetStatus(err, true);
+                if (!string.IsNullOrEmpty(url))
+                {
+                    var r = MessageBox.Show(err + "\n\n是否打开官方下载/仓库页面？", "环境缺失", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (r == DialogResult.Yes) { try { Process.Start(url); } catch { } }
+                }
+                return false;
+            }
+
+            private void Deploy()
+            {
+                if (!RunValidate()) return;
+
+                int port = int.Parse(txtPort.Text.Trim());
+                string node = txtNode.Text.Trim();
+                string repo = txtRepo.Text.Trim();
+                string home = txtHome.Text.Trim();
+                string logDir = txtLog.Text.Trim();
+                if (string.IsNullOrWhiteSpace(logDir)) logDir = Path.Combine(home, "logs");
+                string deployDir = txtDeploy.Text.Trim();
+                if (string.IsNullOrWhiteSpace(deployDir)) deployDir = Path.Combine(home, "dsh-tray-monitor");
+
+                try
+                {
+                    Directory.CreateDirectory(deployDir);
+                    Directory.CreateDirectory(Path.Combine(deployDir, "ico"));
+                    Directory.CreateDirectory(logDir);
+
+                    string exe = Path.Combine(Program.TrayDir, "dsh-tray-monitor.exe");
+                    string destExe = Path.Combine(deployDir, "dsh-tray-monitor.exe");
+                    bool sameDir = string.Equals(
+                        Path.GetFullPath(deployDir).TrimEnd('\\'),
+                        Path.GetFullPath(Program.TrayDir).TrimEnd('\\'),
+                        StringComparison.OrdinalIgnoreCase);
+                    if (!sameDir) File.Copy(exe, destExe, true);
+
+                    Program.CopyIcons(deployDir);
+
+                    File.WriteAllText(Path.Combine(deployDir, "config.json"), Program.BuildConfigJson(port, node, repo, home, logDir, deployDir), new System.Text.UTF8Encoding(false));
+                    File.WriteAllText(Path.Combine(deployDir, "启动DSH.ps1"), Program.BuildStartScript(node, repo, home, logDir, port), new System.Text.UTF8Encoding(true));
+                    File.WriteAllText(Path.Combine(deployDir, "停止DSH.ps1"), Program.BuildStopScript(port), new System.Text.UTF8Encoding(true));
+                    File.WriteAllText(Path.Combine(deployDir, "启动托盘.cmd"), Program.BuildLauncherCmd(), new System.Text.UTF8Encoding(false));
+
+                    Program.SetAutoStart(Program.RunKeyName, chkMon.Checked, "\"" + destExe + "\"");
+                    string ps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\WindowsPowerShell\v1.0\powershell.exe");
+                    string startAbs = Path.Combine(deployDir, "启动DSH.ps1");
+                    Program.SetAutoStart(Program.RunKeyNameDsh, chkDsh.Checked,
+                        "\"" + ps + "\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + startAbs + "\"");
+
+                    if (sameDir)
+                    {
+                        Program.ApplyDeployedConfig(port, node, repo, home, logDir, deployDir);
+                        SetStatus("已部署并应用配置。", false);
+                    }
+                    else
+                    {
+                        var r = MessageBox.Show(
+                            "已部署到：\n" + deployDir + "\n\n是否切换到新目录并重启监控？\n（选“是”：当前监控退出并启动新实例）",
+                            "部署完成", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                        if (r == DialogResult.Yes)
+                        {
+                            Program.SwitchTo(deployDir);
+                        }
+                        else
+                        {
+                            SetStatus("已部署到新目录（当前实例未切换）。", false);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("部署失败：" + ex.Message, true);
+                }
+            }
+
+            private void SetStatus(string s, bool isError)
+            {
+                lblStatus.Text = s;
+                lblStatus.ForeColor = isError ? Color.Red : Color.Green;
+            }
         }
     }
 }
