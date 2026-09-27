@@ -1,5 +1,27 @@
 ﻿# Release Notes
 
+## v2.1 (2026-09-27)
+
+### 修复
+- 🐛 修复「DSH 未启动时偶发先弹『已开启』、紧接着弹『已停止』」的状态抖动：
+  - **连续确认**：判定「已开启」需连续 3 次探测一致（约 9s），「已停止」需连续 2 次；单次瞬时端口占用不再触发通知
+  - **占用者校验**：TCP 可连后再校验监听进程是否为 node/DSH；被其它进程占用端口时忽略并记录日志
+    `probe: 端口被非 DSH 进程占用，已忽略 [PID xx name]`
+- ⚡ 探测超时 600ms → 400ms，减少 UI 线程阻塞；PID 解析逻辑统一复用
+
+### 说明
+- 本版探测过程**不发送 HTTP 请求**（避免安全软件行为启发式误报）
+- 若被 McAfee 等误报拦截，可参考 `DSH白名单清单`（建议排除部署目录与源目录）
+
+### 环境要求
+- Windows 10/11（自带 .NET Framework 4.x）
+- Node.js 22.19+ 或 24+（https://nodejs.org/）
+- 已部署 DeepSeek Harness（https://github.com/deepseek-ai/deepseek-harness）
+
+### 说明（总）
+- 本软件由 DeepSeek 辅助编写（Developed with the assistance of DeepSeek）；DeepSeek logo 版权归 DeepSeek 所有
+
+---
 ## v2.0 (2026-09-26)
 
 ### 新增

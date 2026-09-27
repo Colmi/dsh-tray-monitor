@@ -28,6 +28,9 @@ namespace DshTray
         private const string RunKeyName = "DSHTrayMonitor";
         private const string RunKeyNameDsh = "DSHWebService";
         private const string DshRepoUrl = "https://github.com/deepseek-ai/deepseek-harness";
+        private const int ProbeConnectMs = 400;   // 单次 TCP 探测超时(ms)
+        private const int UpConfirmTicks = 3;     // 连续 N 次探测一致才判定“已开启”（防瞬时误报）
+        private const int DownConfirmTicks = 2;   // 连续 N 次探测一致才判定“已停止”
         private static readonly string TrayDir = AppDomain.CurrentDomain.BaseDirectory;
 
         private static NotifyIcon _ni;
@@ -37,6 +40,8 @@ namespace DshTray
         private static Icon _iconRunning, _iconStopped;
         private static bool _lastUp;
         private static string _pidStr = "";
+        private static int _upStreak = 0;
+        private static int _downStreak = 0;
 
         [STAThread]
         private static void Main()
@@ -148,21 +153,22 @@ namespace DshTray
             catch { }
         }
 
-        private static bool IsUp()
+        // 仅 TCP 连通性（快速路径：用于连续计数）
+        private static bool TcpProbe()
         {
             try
             {
                 using (var c = new TcpClient())
                 {
                     var ar = c.BeginConnect("127.0.0.1", Port, null, null);
-                    if (ar.AsyncWaitHandle.WaitOne(600, false) && c.Connected) return true;
-                    return false;
+                    return ar.AsyncWaitHandle.WaitOne(ProbeConnectMs, false) && c.Connected;
                 }
             }
             catch { return false; }
         }
 
-        private static string GetPidString()
+        // 取监听该端口的进程 PID（0 = 未解析到）
+        private static int GetListeningPid()
         {
             try
             {
@@ -181,14 +187,45 @@ namespace DshTray
                         if (parts.Length >= 5)
                         {
                             int n;
-                            if (int.TryParse(parts[parts.Length - 1], out n))
-                                return " (PID " + n + ")";
+                            if (int.TryParse(parts[parts.Length - 1], out n)) return n;
                         }
                     }
                 }
             }
             catch { }
-            return "";
+            return 0;
+        }
+
+        // 端口占用者是否像 DSH（node / dsh 进程）；无法判定时不作否证（返回 true）
+        private static bool PortOwnerLooksLikeDsh(out string info)
+        {
+            info = "";
+            try
+            {
+                int pid = GetListeningPid();
+                if (pid <= 0) { info = "PID 未解析"; return true; }
+                string name = "";
+                try { using (var p = Process.GetProcessById(pid)) { name = p.ProcessName ?? ""; } } catch { }
+                info = "PID " + pid + (name.Length > 0 ? " " + name : "");
+                if (name.Length == 0) return true;
+                string lower = name.ToLowerInvariant();
+                return lower.Contains("node") || lower.Contains("dsh");
+            }
+            catch { return true; }
+        }
+
+        // 判定 DSH 是否在运行：TCP 可连 且 端口占用者像 DSH（node/dsh）
+        private static bool IsUp()
+        {
+            if (!TcpProbe()) return false;
+            string info;
+            return PortOwnerLooksLikeDsh(out info);
+        }
+
+        private static string GetPidString()
+        {
+            int pid = GetListeningPid();
+            return pid > 0 ? " (PID " + pid + ")" : "";
         }
 
         private static string Truncate(string s, int max)
@@ -355,30 +392,41 @@ namespace DshTray
 
         private static void UpdateStatus()
         {
-            bool up = IsUp();
-            if (up != _lastUp)
+            // 连续计数：单次瞬时占用不再触发状态切换（避免“已开启→已停止”抖动）
+            bool tcpUp = TcpProbe();
+            if (tcpUp) { _upStreak++; _downStreak = 0; } else { _downStreak++; _upStreak = 0; }
+
+            if (!_lastUp && _upStreak >= UpConfirmTicks)
             {
-                _lastUp = up;
-                if (up)
+                string owner;
+                if (PortOwnerLooksLikeDsh(out owner))
                 {
+                    _lastUp = true;
                     _ni.Icon = _iconRunning;
+                    _pidStr = GetPidString();
                     _ni.ShowBalloonTip(2000, "DSH 已开启", "DSH Web 服务已就绪：" + Url, ToolTipIcon.Info);
-                    WriteLog("status: running");
+                    WriteLog("status: running [" + owner + "]");
                 }
-                else
+                else if (_upStreak == UpConfirmTicks)
                 {
-                    _ni.Icon = _iconStopped;
-                    _ni.ShowBalloonTip(2000, "DSH 已停止", "DSH Web 服务当前未运行，可右键菜单启动", ToolTipIcon.Warning);
-                    WriteLog("status: stopped");
+                    WriteLog("probe: 端口被非 DSH 进程占用，已忽略 [" + owner + "]");
                 }
-                _pidStr = up ? GetPidString() : "";
             }
-            string state = up ? "运行中" : "已停止";
+            else if (_lastUp && _downStreak >= DownConfirmTicks)
+            {
+                _lastUp = false;
+                _ni.Icon = _iconStopped;
+                _pidStr = "";
+                _ni.ShowBalloonTip(2000, "DSH 已停止", "DSH Web 服务当前未运行，可右键菜单启动", ToolTipIcon.Warning);
+                WriteLog("status: stopped");
+            }
+
+            string state = _lastUp ? "运行中" : "已停止";
             _ni.Text = Truncate("DSH " + state + _pidStr, 63);
             _miStatus.Text = "状态：" + state + _pidStr;
-            _miStart.Enabled = !up;
-            _miStop.Enabled = up;
-            _miRestart.Enabled = up;
+            _miStart.Enabled = !_lastUp;
+            _miStop.Enabled = _lastUp;
+            _miRestart.Enabled = _lastUp;
             _miAuto.Text = "监控开机自启（" + (IsAutoStartOn() ? "开" : "关") + "）";
             _miAutoDsh.Text = "DSH 开机自启（" + (IsAutoStartDshOn() ? "开" : "关") + "）";
         }
@@ -403,6 +451,8 @@ namespace DshTray
             DeployDir = deployDir;
             bool up = IsUp();
             _lastUp = up;
+            _upStreak = 0;
+            _downStreak = 0;
             _ni.Icon = up ? _iconRunning : _iconStopped;
             UpdateStatus();
             WriteLog("config applied: port=" + port + ", deploy=" + deployDir);
